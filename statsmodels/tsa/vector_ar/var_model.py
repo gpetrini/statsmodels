@@ -93,7 +93,7 @@ def is_stable(coefs, verbose=False):
     eigs = np.linalg.eigvals(A_var1)
 
     if verbose:
-        print('Eigenvalues of VAR(1) rep')
+        print(f'Eigenvalues of VAR({len(coefs)}) rep')
         for val in np.abs(eigs):
             print(val)
 
