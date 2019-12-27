@@ -409,6 +409,38 @@ def _sij(delta_x, delta_y_1_T, y_lag1):
     return s00, s01, s10, s11, s11_, lambd, v
 
 
+def _mse(self, steps):
+        r"""
+        Compute theoretical forecast error variance matrices
+
+        Parameters
+        ----------
+        steps : int
+            Number of steps ahead
+
+        Notes
+        -----
+        .. math:: \mathrm{MSE}(h) = \sum_{i=0}^{h-1} \Phi \Sigma_u \Phi^T
+
+        Returns
+        -------
+        forc_covs : ndarray (steps x neqs x neqs)
+        """
+        ma_coefs = self.ma_rep(steps)
+
+        k = len(self.sigma_u)
+        forc_covs = np.zeros((steps, k, k))
+
+        prior = np.zeros((k, k))
+        for h in range(steps):
+            # Sigma(h) = Sigma(h-1) + Phi Sig_u Phi'
+            phi = ma_coefs[h]
+            var = phi @ self.sigma_u @ phi.T
+            forc_covs[h] = prior = prior + var
+
+        return forc_covs
+
+
 class CointRankResults:
     """A class for holding the results from testing the cointegration rank.
 
@@ -2280,3 +2312,93 @@ class VECMResults(object):
             summary.tables.append(table)
 
         return summary
+    
+class FEVD(object):
+    """
+    Compute and plot Forecast error variance decomposition and asymptotic
+    standard errors
+    """
+    def __init__(self, model, P=None, periods=None):
+
+        self.periods = periods
+
+        self.model = model
+        self.neqs = model.neqs
+        self.names = model.model.endog_names
+
+        self.irfobj = model.irf(periods=periods)
+        self.orth_irfs = self.irfobj.orth_irfs
+
+        # cumulative impulse responses
+        irfs = (self.orth_irfs[:periods] ** 2).cumsum(axis=0)
+
+        rng = lrange(self.neqs)
+        mse = _mse(self.model, periods)[:, rng, rng]
+
+        # lag x equation x component
+        fevd = np.empty_like(irfs)
+
+        for i in range(periods):
+            fevd[i] = (irfs[i].T / mse[i]).T
+
+        # switch to equation x lag x component
+        self.decomp = fevd.swapaxes(0, 1)
+
+    def summary(self):
+        buf = StringIO()
+
+        rng = lrange(self.periods)
+        for i in range(self.neqs):
+            ppm = output.pprint_matrix(self.decomp[i], rng, self.names)
+
+            buf.write('FEVD for %s\n' % self.names[i])
+            buf.write(ppm + '\n')
+
+        print(buf.getvalue())
+
+    def plot(self, periods=None, figsize=(10, 10), **plot_kwds):
+            """Plot graphical display of FEVD
+
+            Parameters
+            ----------
+            periods : int, default None
+                Defaults to number originally specified. Can be at most that number
+            """
+            import matplotlib.pyplot as plt
+
+            k = self.neqs
+            periods = periods or self.periods
+
+            fig, axes = plt.subplots(nrows=k, figsize=figsize)
+
+            fig.suptitle('Forecast error variance decomposition (FEVD)')
+
+            colors = [str(c) for c in np.arange(k, dtype=float) / k]
+            ticks = np.arange(periods)
+
+            limits = self.decomp.cumsum(2)
+
+            for i in range(k):
+                ax = axes[i]
+
+                this_limits = limits[i].T
+
+                handles = []
+
+                for j in range(k):
+                    lower = this_limits[j - 1] if j > 0 else 0
+                    upper = this_limits[j]
+                    handle = ax.bar(ticks, upper - lower, bottom=lower,
+                                    color=colors[j], label=self.names[j],
+                                    **plot_kwds)
+
+                    handles.append(handle)
+
+                ax.set_title(self.names[i])
+
+            # just use the last axis to get handles for plotting
+            handles, labels = ax.get_legend_handles_labels()
+            fig.legend(handles, labels, loc='upper right')
+            plotting.adjust_subplots(right=0.85)
+            return fig
+
